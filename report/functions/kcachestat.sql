@@ -105,6 +105,111 @@ RETURNS TABLE(
       kc.toplevel
 $$ LANGUAGE sql;
 
+CREATE FUNCTION top_kcache_statements_aggr(IN sserver_id integer, IN start_id integer, IN end_id integer)
+RETURNS TABLE(
+    server_id                integer,
+    datid                    oid,
+    dbname                   name,
+    userid                   oid,
+    username                 name,
+    queryid                  bigint,
+    toplevel                 boolean,
+    exec_user_time           double precision, --  User CPU time used
+    user_time_pct            float, --  User CPU time used percentage
+    exec_system_time         double precision, --  System CPU time used
+    system_time_pct          float, --  System CPU time used percentage
+    exec_minflts             bigint, -- Number of page reclaims (soft page faults)
+    exec_majflts             bigint, -- Number of page faults (hard page faults)
+    exec_nswaps              bigint, -- Number of swaps
+    exec_reads               bigint, -- Number of bytes read by the filesystem layer
+    exec_writes              bigint, -- Number of bytes written by the filesystem layer
+    exec_msgsnds             bigint, -- Number of IPC messages sent
+    exec_msgrcvs             bigint, -- Number of IPC messages received
+    exec_nsignals            bigint, -- Number of signals received
+    exec_nvcsws              bigint, -- Number of voluntary context switches
+    exec_nivcsws             bigint,
+    reads_total_pct          float,
+    writes_total_pct         float,
+    plan_user_time           double precision, --  User CPU time used
+    plan_system_time         double precision, --  System CPU time used
+    plan_minflts             bigint, -- Number of page reclaims (soft page faults)
+    plan_majflts             bigint, -- Number of page faults (hard page faults)
+    plan_nswaps              bigint, -- Number of swaps
+    plan_reads               bigint, -- Number of bytes read by the filesystem layer
+    plan_writes              bigint, -- Number of bytes written by the filesystem layer
+    plan_msgsnds             bigint, -- Number of IPC messages sent
+    plan_msgrcvs             bigint, -- Number of IPC messages received
+    plan_nsignals            bigint, -- Number of signals received
+    plan_nvcsws              bigint, -- Number of voluntary context switches
+    plan_nivcsws             bigint
+) SET search_path=@extschema@ AS $$
+  WITH tot AS (
+        SELECT
+            COALESCE(sum(exec_user_time), 0.0) + COALESCE(sum(plan_user_time), 0.0) AS user_time,
+            COALESCE(sum(exec_system_time), 0.0) + COALESCE(sum(plan_system_time), 0.0)  AS system_time,
+            COALESCE(sum(exec_reads), 0) + COALESCE(sum(plan_reads), 0) AS reads,
+            COALESCE(sum(exec_writes), 0) + COALESCE(sum(plan_writes), 0) AS writes
+        FROM sample_kcache_total
+        WHERE server_id = sserver_id AND sample_id BETWEEN start_id + 1 AND end_id)
+    SELECT
+        kc.server_id as server_id,
+        kc.datid as datid,
+        sample_db.datname as dbname,
+        kc.userid as userid,
+        rl.username as username,
+        ('x' || left(kc.queryid_md5, 16))::bit(64)::bigint as queryid,,
+        kc.toplevel as toplevel,
+        sum(kc.exec_user_time) as exec_user_time,
+        ((COALESCE(sum(kc.exec_user_time), 0.0) + COALESCE(sum(kc.plan_user_time), 0.0))
+          *100/NULLIF(min(tot.user_time),0.0))::float AS user_time_pct,
+        sum(kc.exec_system_time) as exec_system_time,
+        ((COALESCE(sum(kc.exec_system_time), 0.0) + COALESCE(sum(kc.plan_system_time), 0.0))
+          *100/NULLIF(min(tot.system_time), 0.0))::float AS system_time_pct,
+        sum(kc.exec_minflts)::bigint as exec_minflts,
+        sum(kc.exec_majflts)::bigint as exec_majflts,
+        sum(kc.exec_nswaps)::bigint as exec_nswaps,
+        sum(kc.exec_reads)::bigint as exec_reads,
+        sum(kc.exec_writes)::bigint as exec_writes,
+        sum(kc.exec_msgsnds)::bigint as exec_msgsnds,
+        sum(kc.exec_msgrcvs)::bigint as exec_msgrcvs,
+        sum(kc.exec_nsignals)::bigint as exec_nsignals,
+        sum(kc.exec_nvcsws)::bigint as exec_nvcsws,
+        sum(kc.exec_nivcsws)::bigint as exec_nivcsws,
+        ((COALESCE(sum(kc.exec_reads), 0) + COALESCE(sum(kc.plan_reads), 0))
+          *100/NULLIF(min(tot.reads),0))::float AS reads_total_pct,
+        ((COALESCE(sum(kc.exec_writes), 0) + COALESCE(sum(kc.plan_writes), 0))
+          *100/NULLIF(min(tot.writes),0))::float AS writes_total_pct,
+        sum(kc.plan_user_time) as plan_user_time,
+        sum(kc.plan_system_time) as plan_system_time,
+        sum(kc.plan_minflts)::bigint as plan_minflts,
+        sum(kc.plan_majflts)::bigint as plan_majflts,
+        sum(kc.plan_nswaps)::bigint as plan_nswaps,
+        sum(kc.plan_reads)::bigint as plan_reads,
+        sum(kc.plan_writes)::bigint as plan_writes,
+        sum(kc.plan_msgsnds)::bigint as plan_msgsnds,
+        sum(kc.plan_msgrcvs)::bigint as plan_msgrcvs,
+        sum(kc.plan_nsignals)::bigint as plan_nsignals,
+        sum(kc.plan_nvcsws)::bigint as plan_nvcsws,
+        sum(kc.plan_nivcsws)::bigint as plan_nivcsws
+   FROM sample_kcache kc
+        -- User name
+        JOIN roles_list rl USING (server_id, userid)
+        -- Database name
+        JOIN sample_stat_database sample_db
+        USING (server_id, sample_id, datid)
+        -- Total stats
+        CROSS JOIN tot
+    WHERE kc.server_id = sserver_id AND kc.sample_id BETWEEN start_id + 1 AND end_id
+    GROUP BY
+      kc.server_id,
+      kc.datid,
+      sample_db.datname,
+      kc.userid,
+      rl.username,
+      kc.queryid_md5,
+      kc.toplevel
+$$ LANGUAGE sql;
+
 
 CREATE FUNCTION top_cpu_time_htbl(IN report_context jsonb, IN sserver_id integer)
 RETURNS text SET search_path=@extschema@ AS $$

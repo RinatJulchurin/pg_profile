@@ -192,6 +192,198 @@ RETURNS TABLE(
       st.toplevel
 $$ LANGUAGE sql;
 
+CREATE FUNCTION top_statements_aggr(IN sserver_id integer, IN start_id integer, IN end_id integer)
+RETURNS TABLE(
+    server_id               integer,
+    datid                   oid,
+    dbname                  name,
+    userid                  oid,
+    username                name,
+    queryid                 bigint,
+    toplevel                boolean,
+    plans                   bigint,
+    plans_pct               float,
+    calls                   bigint,
+    calls_pct               float,
+    total_time              double precision,
+    total_time_pct          double precision,
+    total_plan_time         double precision,
+    plan_time_pct           float,
+    total_exec_time         double precision,
+    total_exec_time_pct     float,
+    exec_time_pct           float,
+    min_exec_time           double precision,
+    max_exec_time           double precision,
+    mean_exec_time          double precision,
+    stddev_exec_time        double precision,
+    min_plan_time           double precision,
+    max_plan_time           double precision,
+    mean_plan_time          double precision,
+    stddev_plan_time        double precision,
+    rows                    bigint,
+    shared_blks_hit         bigint,
+    shared_hit_pct          float,
+    shared_blks_read        bigint,
+    read_pct                float,
+    shared_blks_fetched     bigint,
+    shared_blks_fetched_pct float,
+    shared_blks_dirtied     bigint,
+    dirtied_pct             float,
+    shared_blks_written     bigint,
+    tot_written_pct         float,
+    backend_written_pct     float,
+    local_blks_hit          bigint,
+    local_hit_pct           float,
+    local_blks_read         bigint,
+    local_blks_fetched      bigint,
+    local_blks_dirtied      bigint,
+    local_blks_written      bigint,
+    temp_blks_read          bigint,
+    temp_blks_written       bigint,
+    blk_read_time           double precision,
+    blk_write_time          double precision,
+    io_time                 double precision,
+    io_time_pct             float,
+    temp_read_total_pct     float,
+    temp_write_total_pct    float,
+    local_read_total_pct    float,
+    local_write_total_pct   float,
+    wal_records             bigint,
+    wal_fpi                 bigint,
+    wal_bytes               numeric,
+    wal_bytes_pct           float,
+    user_time               double precision,
+    system_time             double precision,
+    reads                   bigint,
+    writes                  bigint,
+    jit_functions           bigint,
+    jit_generation_time     double precision,
+    jit_inlining_count      bigint,
+    jit_inlining_time       double precision,
+    jit_optimization_count  bigint,
+    jit_optimization_time   double precision,
+    jit_emission_count      bigint,
+    jit_emission_time       double precision
+) SET search_path=@extschema@ AS $$
+    WITH
+      tot AS (
+        SELECT
+            COALESCE(sum(total_plan_time), 0.0) + sum(total_exec_time) AS total_time,
+            sum(blk_read_time) AS blk_read_time,
+            sum(blk_write_time) AS blk_write_time,
+            sum(shared_blks_hit) AS shared_blks_hit,
+            sum(shared_blks_read) AS shared_blks_read,
+            sum(shared_blks_dirtied) AS shared_blks_dirtied,
+            sum(temp_blks_read) AS temp_blks_read,
+            sum(temp_blks_written) AS temp_blks_written,
+            sum(local_blks_read) AS local_blks_read,
+            sum(local_blks_written) AS local_blks_written,
+            sum(calls) AS calls,
+            sum(plans) AS plans
+        FROM sample_statements_total st
+        WHERE st.server_id = sserver_id AND st.sample_id BETWEEN start_id + 1 AND end_id
+      ),
+      totbgwr AS (
+        SELECT
+          sum(buffers_checkpoint) + sum(buffers_clean) + sum(buffers_backend) AS written,
+          sum(buffers_backend) AS buffers_backend,
+          sum(wal_size) AS wal_size
+        FROM sample_stat_cluster
+        WHERE server_id = sserver_id AND sample_id BETWEEN start_id + 1 AND end_id
+      )
+    SELECT
+        st.server_id as server_id,
+        st.datid as datid,
+        sample_db.datname as dbname,
+        st.userid as userid,
+        rl.username as username,
+        ('x' || left(st.queryid_md5, 16))::bit(64)::bigint as queryid,
+        st.toplevel as toplevel,
+        sum(st.plans)::bigint as plans,
+        (sum(st.plans)*100/NULLIF(min(tot.plans), 0))::float as plans_pct,
+        sum(st.calls)::bigint as calls,
+        (sum(st.calls)*100/NULLIF(min(tot.calls), 0))::float as calls_pct,
+        (sum(st.total_exec_time) + COALESCE(sum(st.total_plan_time), 0.0))/1000 as total_time,
+        (sum(st.total_exec_time) + COALESCE(sum(st.total_plan_time), 0.0))*100/NULLIF(min(tot.total_time), 0) as total_time_pct,
+        sum(st.total_plan_time)/1000::double precision as total_plan_time,
+        sum(st.total_plan_time)*100/NULLIF(sum(st.total_exec_time) + COALESCE(sum(st.total_plan_time), 0.0), 0) as plan_time_pct,
+        sum(st.total_exec_time)/1000::double precision as total_exec_time,
+        sum(st.total_exec_time)*100/NULLIF(min(tot.total_time), 0) as total_exec_time_pct,
+        sum(st.total_exec_time)*100/NULLIF(sum(st.total_exec_time) + COALESCE(sum(st.total_plan_time), 0.0), 0) as exec_time_pct,
+        min(st.min_exec_time) as min_exec_time,
+        max(st.max_exec_time) as max_exec_time,
+        sum(st.mean_exec_time*st.calls)/NULLIF(sum(st.calls), 0) as mean_exec_time,
+        sqrt(sum((power(st.stddev_exec_time,2)+power(st.mean_exec_time,2))*st.calls)/NULLIF(sum(st.calls),0)-power(sum(st.mean_exec_time*st.calls)/NULLIF(sum(st.calls),0),2)) as stddev_exec_time,
+        min(st.min_plan_time) as min_plan_time,
+        max(st.max_plan_time) as max_plan_time,
+        sum(st.mean_plan_time*st.plans)/NULLIF(sum(st.plans),0) as mean_plan_time,
+        sqrt(sum((power(st.stddev_plan_time,2)+power(st.mean_plan_time,2))*st.plans)/NULLIF(sum(st.plans),0)-power(sum(st.mean_plan_time*st.plans)/NULLIF(sum(st.plans),0),2)) as stddev_plan_time,
+        sum(st.rows)::bigint as rows,
+        sum(st.shared_blks_hit)::bigint as shared_blks_hit,
+        (sum(st.shared_blks_hit) * 100 / NULLIF(sum(st.shared_blks_hit) + sum(st.shared_blks_read), 0))::float as shared_hit_pct,
+        sum(st.shared_blks_read)::bigint as shared_blks_read,
+        (sum(st.shared_blks_read) * 100 / NULLIF(min(tot.shared_blks_read), 0))::float as read_pct,
+        (sum(st.shared_blks_hit) + sum(st.shared_blks_read))::bigint as shared_blks_fetched,
+        ((sum(st.shared_blks_hit) + sum(st.shared_blks_read)) * 100 / NULLIF(min(tot.shared_blks_hit) + min(tot.shared_blks_read), 0))::float as shared_blks_fetched_pct,
+        sum(st.shared_blks_dirtied)::bigint as shared_blks_dirtied,
+        (sum(st.shared_blks_dirtied) * 100 / NULLIF(min(tot.shared_blks_dirtied), 0))::float as dirtied_pct,
+        sum(st.shared_blks_written)::bigint as shared_blks_written,
+        (sum(st.shared_blks_written) * 100 / NULLIF(min(totbgwr.written), 0))::float as tot_written_pct,
+        (sum(st.shared_blks_written) * 100 / NULLIF(min(totbgwr.buffers_backend), 0))::float as backend_written_pct,
+        sum(st.local_blks_hit)::bigint as local_blks_hit,
+        (sum(st.local_blks_hit) * 100 / NULLIF(sum(st.local_blks_hit) + sum(st.local_blks_read),0))::float as local_hit_pct,
+        sum(st.local_blks_read)::bigint as local_blks_read,
+        (sum(st.local_blks_hit) + sum(st.local_blks_read))::bigint as local_blks_fetched,
+        sum(st.local_blks_dirtied)::bigint as local_blks_dirtied,
+        sum(st.local_blks_written)::bigint as local_blks_written,
+        sum(st.temp_blks_read)::bigint as temp_blks_read,
+        sum(st.temp_blks_written)::bigint as temp_blks_written,
+        sum(st.blk_read_time)/1000::double precision as blk_read_time,
+        sum(st.blk_write_time)/1000::double precision as blk_write_time,
+        (sum(st.blk_read_time) + sum(st.blk_write_time))/1000::double precision as io_time,
+        (sum(st.blk_read_time) + sum(st.blk_write_time)) * 100 / NULLIF(min(tot.blk_read_time) + min(tot.blk_write_time),0) as io_time_pct,
+        (sum(st.temp_blks_read) * 100 / NULLIF(min(tot.temp_blks_read), 0))::float as temp_read_total_pct,
+        (sum(st.temp_blks_written) * 100 / NULLIF(min(tot.temp_blks_written), 0))::float as temp_write_total_pct,
+        (sum(st.local_blks_read) * 100 / NULLIF(min(tot.local_blks_read), 0))::float as local_read_total_pct,
+        (sum(st.local_blks_written) * 100 / NULLIF(min(tot.local_blks_written), 0))::float as local_write_total_pct,
+        sum(st.wal_records)::bigint as wal_records,
+        sum(st.wal_fpi)::bigint as wal_fpi,
+        sum(st.wal_bytes) as wal_bytes,
+        (sum(st.wal_bytes) * 100 / NULLIF(min(totbgwr.wal_size), 0))::float wal_bytes_pct,
+        -- kcache stats
+        COALESCE(sum(kc.exec_user_time), 0.0) + COALESCE(sum(kc.plan_user_time), 0.0) as user_time,
+        COALESCE(sum(kc.exec_system_time), 0.0) + COALESCE(sum(kc.plan_system_time), 0.0) as system_time,
+        (COALESCE(sum(kc.exec_reads), 0) + COALESCE(sum(kc.plan_reads), 0))::bigint as reads,
+        (COALESCE(sum(kc.exec_writes), 0) + COALESCE(sum(kc.plan_writes), 0))::bigint as writes,
+        sum(st.jit_functions)::bigint AS jit_functions,
+        sum(st.jit_generation_time)/1000::double precision AS jit_generation_time,
+        sum(st.jit_inlining_count)::bigint AS jit_inlining_count,
+        sum(st.jit_inlining_time)/1000::double precision AS jit_inlining_time,
+        sum(st.jit_optimization_count)::bigint AS jit_optimization_count,
+        sum(st.jit_optimization_time)/1000::double precision AS jit_optimization_time,
+        sum(st.jit_emission_count)::bigint AS jit_emission_count,
+        sum(st.jit_emission_time)/1000::double precision AS jit_emission_time
+    FROM sample_statements st
+        -- User name
+        JOIN roles_list rl USING (server_id, userid)
+        -- Database name
+        JOIN sample_stat_database sample_db
+        USING (server_id, sample_id, datid)
+        -- kcache join
+        LEFT OUTER JOIN sample_kcache kc USING(server_id, sample_id, userid, datid, queryid, toplevel)
+        -- Total stats
+        CROSS JOIN tot CROSS JOIN totbgwr
+    WHERE st.server_id = sserver_id AND st.sample_id BETWEEN start_id + 1 AND end_id
+    GROUP BY
+      st.server_id,
+      st.datid,
+      sample_db.datname,
+      st.userid,
+      rl.username,
+      st.queryid_md5,
+      st.toplevel
+$$ LANGUAGE sql;
+
 CREATE FUNCTION top_jit_htbl(IN report_context jsonb, IN sserver_id integer)
 RETURNS text SET search_path=@extschema@ AS $$
 DECLARE
@@ -3828,6 +4020,48 @@ $$ LANGUAGE plpgsql;
 CREATE FUNCTION report_queries(IN report_context jsonb, IN sserver_id integer)
 RETURNS text SET search_path=@extschema@ AS $$
 DECLARE
+    c_queries_aggr CURSOR(start1_id integer, end1_id integer,
+      start2_id integer, end2_id integer, topn integer)
+    FOR
+    SELECT
+      queryid,
+      ord,
+      row_span,
+      query
+    FROM (
+      SELECT
+      queryid,
+      row_number() OVER (PARTITION BY queryid
+        ORDER BY
+          last_sample_id DESC NULLS FIRST,
+          queryid_md5 DESC NULLS FIRST
+        ) ord,
+      -- Calculate a value for statement rowspan atribute
+      least(count(*) OVER (PARTITION BY queryid),3) row_span,
+      query
+      FROM (
+        SELECT DISTINCT
+          server_id,
+          ('x' || left(queryid_md5, 16))::bit(64)::bigint queryid,
+          queryid_md5
+        FROM
+          queries_list ql
+          JOIN sample_statements ss
+		  ON ql.datid = ss.datid AND ql.userid = ss.userid AND ql.queryid = ('x' || left(ss.queryid_md5, 16))::bit(64)::bigint
+        WHERE
+          ss.server_id = sserver_id
+          AND (
+            sample_id BETWEEN start1_id AND end1_id
+            OR sample_id BETWEEN start2_id AND end2_id
+          )
+      ) queryids
+      JOIN stmt_list USING (server_id, queryid_md5)
+    ) ord_stmt_v
+    WHERE ord <= 3
+    ORDER BY
+      queryid ASC,
+      ord ASC;
+
     c_queries CURSOR(start1_id integer, end1_id integer,
       start2_id integer, end2_id integer, topn integer)
     FOR
@@ -3874,7 +4108,15 @@ DECLARE
     query_text  text := '';
     qlen_limit  integer;
     jtab_tpl    jsonb;
+  	aggregate_queries_by_text boolean;
 BEGIN
+    -- Getting aggregate_queries_by_text setting
+    BEGIN
+        aggregate_queries_by_text := current_setting('pg_profile.aggregate_queries_by_text')::boolean;
+    EXCEPTION
+        WHEN OTHERS THEN aggregate_queries_by_text := false;
+    END;
+	
     jtab_tpl := jsonb_build_object(
       'tab_hdr',
         '<table class="stmtlist">'
@@ -3899,30 +4141,57 @@ BEGIN
 
     qlen_limit := (report_context #>> '{report_properties,max_query_length}')::integer;
 
-    FOR qr_result IN c_queries(
-        (report_context #>> '{report_properties,start1_id}')::integer,
-        (report_context #>> '{report_properties,end1_id}')::integer,
-        (report_context #>> '{report_properties,start2_id}')::integer,
-        (report_context #>> '{report_properties,end2_id}')::integer,
-        (report_context #>> '{report_properties,topn}')::integer
-      )
-    LOOP
-        query_text := replace(qr_result.query,'<','&lt;');
-        query_text := replace(query_text,'>','&gt;');
-        IF qr_result.ord = 1 THEN
-          report := report||format(
-              jtab_tpl #>> ARRAY['stmt_tpl'],
-              to_hex(qr_result.queryid),
-              left(query_text,qlen_limit),
-              qr_result.row_span
-          );
-        ELSE
-          report := report||format(
-              jtab_tpl #>> ARRAY['substmt_tpl'],
-              left(query_text,qlen_limit)
-          );
-        END IF;
-    END LOOP;
+	IF aggregate_queries_by_text THEN
+		FOR qr_result IN c_queries_aggr(
+			(report_context #>> '{report_properties,start1_id}')::integer,
+			(report_context #>> '{report_properties,end1_id}')::integer,
+			(report_context #>> '{report_properties,start2_id}')::integer,
+			(report_context #>> '{report_properties,end2_id}')::integer,
+			(report_context #>> '{report_properties,topn}')::integer
+		  )
+		LOOP
+			query_text := replace(qr_result.query,'<','&lt;');
+			query_text := replace(query_text,'>','&gt;');
+			IF qr_result.ord = 1 THEN
+			  report := report||format(
+				  jtab_tpl #>> ARRAY['stmt_tpl'],
+				  to_hex(qr_result.queryid),
+				  left(query_text,qlen_limit),
+				  qr_result.row_span
+			  );
+			ELSE
+			  report := report||format(
+				  jtab_tpl #>> ARRAY['substmt_tpl'],
+				  left(query_text,qlen_limit)
+			  );
+			END IF;
+		END LOOP;
+	ELSE
+		FOR qr_result IN c_queries(
+			(report_context #>> '{report_properties,start1_id}')::integer,
+			(report_context #>> '{report_properties,end1_id}')::integer,
+			(report_context #>> '{report_properties,start2_id}')::integer,
+			(report_context #>> '{report_properties,end2_id}')::integer,
+			(report_context #>> '{report_properties,topn}')::integer
+		  )
+		LOOP
+			query_text := replace(qr_result.query,'<','&lt;');
+			query_text := replace(query_text,'>','&gt;');
+			IF qr_result.ord = 1 THEN
+			  report := report||format(
+				  jtab_tpl #>> ARRAY['stmt_tpl'],
+				  to_hex(qr_result.queryid),
+				  left(query_text,qlen_limit),
+				  qr_result.row_span
+			  );
+			ELSE
+			  report := report||format(
+				  jtab_tpl #>> ARRAY['substmt_tpl'],
+				  left(query_text,qlen_limit)
+			  );
+			END IF;
+		END LOOP;
+	END IF;
 
     IF report != '' THEN
         RETURN replace(jtab_tpl #>> ARRAY['tab_hdr'],'{rows}',report);

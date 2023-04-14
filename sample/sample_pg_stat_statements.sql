@@ -2,7 +2,15 @@ CREATE FUNCTION collect_pg_stat_statements_stats(IN properties jsonb, IN sserver
 DECLARE
   qres              record;
   st_query          text;
+  rename_temp_tables boolean;
 BEGIN
+    -- Getting rename_temp_tables setting
+    BEGIN
+        rename_temp_tables := current_setting('pg_profile.rename_temp_tables')::boolean;
+    EXCEPTION
+        WHEN OTHERS THEN rename_temp_tables := false;
+    END;
+
     -- Adding dblink extension schema to search_path if it does not already there
     SELECT extnamespace::regnamespace AS dblink_schema INTO STRICT qres FROM pg_catalog.pg_extension WHERE extname = 'dblink';
     IF NOT string_to_array(current_setting('search_path'),',') @> ARRAY[qres.dblink_schema::text] THEN
@@ -601,7 +609,9 @@ BEGIN
         datid,
         toplevel,
         queryid,
-        query
+        case when rename_temp_tables and query like '%pg_temp.tt%' 
+		then regexp_replace(regexp_replace(query, '_Q_[0-9][0-9][0-9]_F_', '_Q_000_F_', 'g'), 'pg_temp\.tt[0-9]+', 'pg_temp.tt', 'g') 
+		else query end query
       FROM dblink('server_connection',st_query) AS
         dbl(
             userid    oid,

@@ -281,7 +281,15 @@ DECLARE
   start2_id   integer = (report_context #>> '{report_properties,start2_id}')::integer;
   end1_id     integer = (report_context #>> '{report_properties,end1_id}')::integer;
   end2_id     integer = (report_context #>> '{report_properties,end2_id}')::integer;
+  aggregate_queries_by_text boolean;
 BEGIN
+    -- Getting aggregate_queries_by_text setting
+    BEGIN
+        aggregate_queries_by_text := current_setting('pg_profile.aggregate_queries_by_text')::boolean;
+    EXCEPTION
+        WHEN OTHERS THEN aggregate_queries_by_text := false;
+    END;
+	
     -- Report internal temporary tables
     -- Creating temporary table for reported queries
     CREATE TEMPORARY TABLE IF NOT EXISTS queries_list (
@@ -295,8 +303,13 @@ BEGIN
     * Caching temporary tables, containing object stats cache
     * used several times in a report functions
     */
-    CREATE TEMPORARY TABLE top_statements1 AS
-    SELECT * FROM top_statements(sserver_id, start1_id, end1_id);
+	IF aggregate_queries_by_text THEN
+    	CREATE TEMPORARY TABLE top_statements1 AS
+    	SELECT * FROM top_statements_aggr(sserver_id, start1_id, end1_id);
+	ELSE
+    	CREATE TEMPORARY TABLE top_statements1 AS
+    	SELECT * FROM top_statements(sserver_id, start1_id, end1_id);
+    END IF;
 
     /* table size is collected in a sample when relsize field is not null
     In a report we can use relsize-based growth calculated as a sum of
@@ -378,8 +391,13 @@ BEGIN
     SELECT * FROM top_io_indexes(sserver_id, start1_id, end1_id);
     CREATE TEMPORARY TABLE top_functions1 AS
     SELECT * FROM top_functions(sserver_id, start1_id, end1_id, false);
-    CREATE TEMPORARY TABLE top_kcache_statements1 AS
-    SELECT * FROM top_kcache_statements(sserver_id, start1_id, end1_id);
+	IF aggregate_queries_by_text THEN
+		CREATE TEMPORARY TABLE top_kcache_statements1 AS
+		SELECT * FROM top_kcache_statements_aggr(sserver_id, start1_id, end1_id);
+	ELSE
+		CREATE TEMPORARY TABLE top_kcache_statements1 AS
+		SELECT * FROM top_kcache_statements(sserver_id, start1_id, end1_id);
+    END IF;
 
     ANALYZE top_statements1;
     ANALYZE top_tables1;
@@ -396,8 +414,13 @@ BEGIN
     END IF;
 
     IF num_nulls(start2_id, end2_id) = 0 THEN
-      CREATE TEMPORARY TABLE top_statements2 AS
-      SELECT * FROM top_statements(sserver_id, start2_id, end2_id);
+	  IF aggregate_queries_by_text THEN
+    	CREATE TEMPORARY TABLE top_statements2 AS
+      	SELECT * FROM top_statements_aggr(sserver_id, start2_id, end2_id);
+	  ELSE
+    	CREATE TEMPORARY TABLE top_statements2 AS
+      	SELECT * FROM top_statements(sserver_id, start2_id, end2_id);
+      END IF;
 
       CREATE TEMPORARY TABLE top_tables2 AS
       SELECT tt.*,
@@ -473,8 +496,13 @@ BEGIN
       SELECT * FROM top_io_indexes(sserver_id, start2_id, end2_id);
       CREATE TEMPORARY TABLE top_functions2 AS
       SELECT * FROM top_functions(sserver_id, start2_id, end2_id, false);
-      CREATE TEMPORARY TABLE top_kcache_statements2 AS
-      SELECT * FROM top_kcache_statements(sserver_id, start2_id, end2_id);
+	  IF aggregate_queries_by_text THEN
+      	CREATE TEMPORARY TABLE top_kcache_statements2 AS
+      	SELECT * FROM top_kcache_statements_aggr(sserver_id, start2_id, end2_id);
+	  ELSE
+      	CREATE TEMPORARY TABLE top_kcache_statements2 AS
+      	SELECT * FROM top_kcache_statements(sserver_id, start2_id, end2_id);
+	  END IF;
 
       ANALYZE top_statements2;
       ANALYZE top_tables2;
