@@ -123,6 +123,8 @@ You can define extension parameters in _postgresql.conf_. Default values:
 * _pg_profile.max_sample_age = 7_ - Retention time of samples in days. Samples, aged _pg_profile.max_sample_age_ days and more will be automatically deleted on next _take_sample()_ call.
 * _pg_profile.track_sample_timings = off_ - when this parameter is on, _pg_profile_ will track detailed sample taking timings.
 * _pg_profile.max_query_length = 20000_ - query length limit for reports. All queries in a report will be truncated to this length. This setting does not affect query text collection - during a sample full query texts are collected, thus can be obtained.
+* _pg_profile.rename_temp_tables = off_ - when this parameter is on, _pg_profile_ will rename queries with temporary tables like '%pg_temp.tt%' by regular expression regexp_replace(regexp_replace(query, '_Q_[0-9][0-9][0-9]_F_', '_Q_000_F_', 'g'), 'pg_temp\.tt[0-9]+', 'pg_temp.tt', 'g').
+* _pg_profile.aggregate_queries_by_text = off_ - when this parameter is on, _pg_profile_ will aggregate statistics by text queries instead of query id.
 ### Managing servers
 Once installed, extension will create one enabled *local* server - this is for cluster, where extension is installed.
 
