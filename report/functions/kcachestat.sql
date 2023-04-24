@@ -157,7 +157,7 @@ RETURNS TABLE(
         sample_db.datname as dbname,
         kc.userid as userid,
         rl.username as username,
-        ('x' || left(kc.queryid_md5, 16))::bit(64)::bigint as queryid,,
+        ('x' || left(kc.queryid_md5, 16))::bit(64)::bigint as queryid,
         kc.toplevel as toplevel,
         sum(kc.exec_user_time) as exec_user_time,
         ((COALESCE(sum(kc.exec_user_time), 0.0) + COALESCE(sum(kc.plan_user_time), 0.0))
